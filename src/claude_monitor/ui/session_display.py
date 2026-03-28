@@ -312,13 +312,13 @@ class SessionDisplayComponent:
         )
         screen_buffer.append("")
 
-        # Suppress cost exceed notification for subscription plans
+        # Suppress cost-based notifications for subscription plans
         is_subscription = plan in ["pro", "team", "max5", "max20"]
         self._add_notifications(
             screen_buffer,
             show_switch_notification,
             show_exceed_notification and not is_subscription,
-            show_tokens_will_run_out,
+            show_tokens_will_run_out and not is_subscription,
             original_limit,
             token_limit,
         )
