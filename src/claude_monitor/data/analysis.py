@@ -219,6 +219,7 @@ def _format_block_entries(entries: List[UsageEntry]) -> List[Dict[str, Any]]:
             "model": entry.model,
             "messageId": entry.message_id,
             "requestId": entry.request_id,
+            "agentId": entry.agent_id,
         }
         for entry in entries
     ]

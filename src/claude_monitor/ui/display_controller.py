@@ -276,6 +276,9 @@ class DisplayController:
         )
         processed_data["weekly_tokens"] = weekly_tokens
 
+        # Calculate per-agent token breakdown from all blocks
+        processed_data["agent_stats"] = _calculate_agent_stats(data.get("blocks", []))
+
         try:
             screen_buffer = self.session_display.format_active_session_screen(
                 **processed_data
@@ -631,6 +634,31 @@ def _calculate_weekly_tokens(
         "reset_time": next_reset,
         "reset_time_str": next_reset.strftime("%a %H:%M"),
     }
+
+
+def _calculate_agent_stats(blocks: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Calculate per-agent token totals from all blocks.
+
+    Args:
+        blocks: All session blocks with entries containing agentId
+
+    Returns:
+        Dict mapping agent_id to total tokens
+    """
+    agent_tokens: Dict[str, int] = {}
+    for block in blocks:
+        if block.get("isGap", False):
+            continue
+        for entry in block.get("entries", []):
+            agent = entry.get("agentId", "") or "unknown"
+            tokens = (
+                entry.get("inputTokens", 0)
+                + entry.get("outputTokens", 0)
+                + entry.get("cacheCreationTokens", 0)
+                + entry.get("cacheReadInputTokens", 0)
+            )
+            agent_tokens[agent] = agent_tokens.get(agent, 0) + tokens
+    return agent_tokens
 
 
 # Legacy functions for backward compatibility

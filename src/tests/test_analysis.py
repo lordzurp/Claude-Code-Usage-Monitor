@@ -447,6 +447,7 @@ class TestBlockConversion:
             "model": "claude-3-haiku",
             "messageId": "msg_1",
             "requestId": "req_1",
+            "agentId": "",
         }
 
     def test_create_base_block_dict(self) -> None:

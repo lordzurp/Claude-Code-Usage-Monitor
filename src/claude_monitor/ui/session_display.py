@@ -247,6 +247,24 @@ class SessionDisplayComponent:
                 )
                 screen_buffer.append("")
 
+            # Per-agent breakdown
+            agent_stats = kwargs.get("agent_stats", {})
+            if agent_stats and len(agent_stats) > 0:
+                total_agent_tokens = sum(agent_stats.values())
+                if total_agent_tokens > 0:
+                    # Sort by tokens descending
+                    sorted_agents = sorted(agent_stats.items(), key=lambda x: x[1], reverse=True)
+                    agent_parts = []
+                    for agent, tokens in sorted_agents:
+                        pct = (tokens / total_agent_tokens) * 100
+                        if pct >= 1.0:  # Only show agents with >= 1%
+                            agent_parts.append(f"[value]{agent}[/] {pct:.0f}%")
+                    if agent_parts:
+                        screen_buffer.append(
+                            f"👥 [value]Agents:[/]               {' · '.join(agent_parts)}"
+                        )
+                        screen_buffer.append("")
+
             if per_model_stats:
                 model_bar = self.model_usage.render(per_model_stats)
                 screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {model_bar}")
