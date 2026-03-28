@@ -61,13 +61,15 @@ def load_usage_entries(
         cutoff_time = datetime.now(tz.utc) - timedelta(hours=hours_back)
 
     # Map each jsonl file to its source directory for agent tagging
+    # Use dict to deduplicate overlapping scan directories
     file_to_agent: Dict[Path, str] = {}
-    jsonl_files: List[Path] = []
     for scan_dir in scan_dirs:
         agent_id = _extract_agent_id(scan_dir)
         for f in _find_jsonl_files(scan_dir):
-            jsonl_files.append(f)
-            file_to_agent[f] = agent_id
+            resolved = f.resolve()
+            if resolved not in file_to_agent:
+                file_to_agent[resolved] = agent_id
+    jsonl_files: List[Path] = list(file_to_agent.keys())
 
     if not jsonl_files:
         logger.warning("No JSONL files found in %s", scan_dirs)
