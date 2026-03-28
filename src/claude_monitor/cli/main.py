@@ -2,13 +2,14 @@
 
 import argparse
 import contextlib
+import glob
 import logging
+import os
 import signal
 import sys
 import time
 import traceback
 from pathlib import Path
-import os
 from typing import Any, Callable, Dict, List, NoReturn, Optional, Union
 
 from rich.console import Console
@@ -95,6 +96,33 @@ def discover_claude_data_paths(custom_paths: Optional[List[str]] = None) -> List
     return discovered_paths
 
 
+def _scan_homes_for_claude_data(pattern: str) -> List[str]:
+    """Scan directories matching a glob pattern for Claude data.
+
+    Looks for .claude/projects/ under each matched directory.
+
+    Args:
+        pattern: Glob pattern (e.g. '/home/*', '/Users/*')
+
+    Returns:
+        List of discovered Claude data directory paths
+    """
+    logger = logging.getLogger(__name__)
+    discovered: List[str] = []
+
+    for home_dir in sorted(glob.glob(pattern)):
+        claude_projects = Path(home_dir) / ".claude" / "projects"
+        try:
+            if claude_projects.is_dir():
+                discovered.append(str(claude_projects))
+                logger.info(f"scan-homes: found {claude_projects}")
+        except PermissionError:
+            logger.debug(f"scan-homes: permission denied on {home_dir}, skipping")
+
+    logger.info(f"scan-homes: {len(discovered)} directories from pattern '{pattern}'")
+    return discovered
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry point with direct pydantic-settings integration."""
     if argv is None:
@@ -146,10 +174,14 @@ def _run_monitoring(args: argparse.Namespace) -> None:
     live_display_active: bool = False
 
     try:
-        # Resolve data paths: CLI --data-paths overrides auto-discovery
+        # Resolve data paths: --scan-homes > --data-paths > auto-discovery
+        scan_homes_pattern: Optional[str] = getattr(args, "scan_homes", None)
         custom_data_paths: Optional[List[str]] = getattr(args, "data_paths", None)
         data_paths: List[Path]
-        if custom_data_paths:
+        if scan_homes_pattern and isinstance(scan_homes_pattern, str):
+            scanned = _scan_homes_for_claude_data(scan_homes_pattern)
+            data_paths = discover_claude_data_paths(scanned) if scanned else []
+        elif custom_data_paths:
             data_paths = discover_claude_data_paths(custom_data_paths)
         else:
             data_paths = discover_claude_data_paths()

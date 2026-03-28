@@ -115,6 +115,12 @@ class Settings(BaseSettings):
         json_schema_extra={"metavar": "PATHS"},
     )
 
+    scan_homes: Optional[str] = Field(
+        default=None,
+        description="Glob pattern to auto-discover Claude data directories (e.g. /home/*). Scans for .claude/projects/ under each match.",
+        json_schema_extra={"metavar": "PATTERN"},
+    )
+
     @staticmethod
     def _get_system_timezone() -> str:
         """Lazy import to avoid circular dependencies."""
@@ -377,5 +383,6 @@ class Settings(BaseSettings):
         args.log_file = str(self.log_file) if self.log_file else None
         args.version = self.version
         args.data_paths = self.data_paths
+        args.scan_homes = self.scan_homes
 
         return args
