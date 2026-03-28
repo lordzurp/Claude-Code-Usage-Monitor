@@ -45,6 +45,9 @@ class PlanConfig:
 
 
 PLAN_LIMITS: Dict[PlanType, Dict[str, Any]] = {
+    # Token limits = input + output tokens per 5h window (excludes cache)
+    # Calibration 2026-03-28: 50k in+out = 66% of MAX5 → ~76k limit
+    # Original values (88k) are close — Anthropic likely counts in+out only
     PlanType.PRO: {
         "token_limit": 19_000,
         "cost_limit": 18.0,
