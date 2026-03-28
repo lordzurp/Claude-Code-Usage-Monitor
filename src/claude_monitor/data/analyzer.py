@@ -31,6 +31,27 @@ class SessionAnalyzer:
         self.session_duration_hours = session_duration_hours
         self.session_duration = timedelta(hours=session_duration_hours)
         self.timezone_handler = TimezoneHandler()
+        self._calibration = self._load_calibration()
+
+    @staticmethod
+    def _load_calibration() -> Optional[Dict[str, Any]]:
+        """Load calibration data if available."""
+        import json
+        from pathlib import Path
+
+        cal_file = Path.home() / ".claude-monitor" / "calibration.json"
+        if not cal_file.exists():
+            return None
+        try:
+            with open(cal_file) as f:
+                cal = json.load(f)
+            # Only use if less than 6 hours old
+            cal_time = datetime.fromisoformat(cal["timestamp"])
+            if (datetime.now(timezone.utc) - cal_time).total_seconds() > 6 * 3600:
+                return None
+            return cal
+        except Exception:
+            return None
 
     def transform_to_blocks(self, entries: List[UsageEntry]) -> List[SessionBlock]:
         """Process entries and create session blocks.
@@ -106,6 +127,27 @@ class SessionAnalyzer:
             and (entry.timestamp - block.entries[-1].timestamp) >= self.session_duration
         )
 
+    def _align_to_calibration(self, timestamp: datetime) -> datetime:
+        """Align block start to Anthropic's window grid using calibration data.
+
+        The calibration gives us one known window boundary. We extrapolate
+        a 5h grid from that anchor point and find the window that contains
+        the given timestamp.
+        """
+        anchor_start = datetime.fromisoformat(self._calibration["window_start"])
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        # How many 5h windows between anchor and timestamp?
+        delta = (timestamp - anchor_start).total_seconds()
+        window_index = int(delta // self.session_duration.total_seconds())
+        if delta < 0:
+            window_index -= 1
+
+        return anchor_start + timedelta(
+            seconds=window_index * self.session_duration.total_seconds()
+        )
+
     def _round_to_hour(self, timestamp: datetime) -> datetime:
         """Round timestamp to the nearest full hour in UTC."""
         if timestamp.tzinfo is None:
@@ -116,8 +158,15 @@ class SessionAnalyzer:
         return timestamp.replace(minute=0, second=0, microsecond=0)
 
     def _create_new_block(self, entry: UsageEntry) -> SessionBlock:
-        """Create a new session block."""
-        start_time = self._round_to_hour(entry.timestamp)
+        """Create a new session block.
+
+        If calibration data is available, aligns block boundaries to
+        Anthropic's actual window schedule instead of rounding to the hour.
+        """
+        if self._calibration:
+            start_time = self._align_to_calibration(entry.timestamp)
+        else:
+            start_time = self._round_to_hour(entry.timestamp)
         end_time = start_time + self.session_duration
         block_id = start_time.isoformat()
 

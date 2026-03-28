@@ -121,6 +121,11 @@ class Settings(BaseSettings):
         json_schema_extra={"metavar": "PATTERN"},
     )
 
+    calibrate: Optional[str] = Field(
+        default=None,
+        description="Calibrate from Anthropic usage page: 'PERCENT,MINUTES_LEFT' (e.g. '66,6' means 66% used, 6 min to reset)",
+    )
+
     compact: bool = Field(
         default=False,
         description="Enable compact single-line display mode for status bars and tmux",

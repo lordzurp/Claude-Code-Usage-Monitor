@@ -123,6 +123,59 @@ def _scan_homes_for_claude_data(pattern: str) -> List[str]:
     return discovered
 
 
+def _run_calibration(calibrate_str: str) -> int:
+    """Run calibration from Anthropic usage page data.
+
+    Parses 'PERCENT,MINUTES_LEFT', calculates the real window start,
+    and saves to ~/.claude-monitor/calibration.json.
+
+    Args:
+        calibrate_str: String like '66,6' (66% used, 6 min to reset)
+
+    Returns:
+        Exit code
+    """
+    import json
+
+    try:
+        parts = calibrate_str.split(",")
+        if len(parts) != 2:
+            print("Error: --calibrate expects 'PERCENT,MINUTES_LEFT' (e.g. '66,6')")
+            return 1
+
+        pct = float(parts[0].strip().rstrip("%"))
+        minutes_left = float(parts[1].strip().rstrip("m").rstrip("min"))
+
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(minutes=minutes_left)
+        window_start = window_end - timedelta(hours=5)
+
+        calibration = {
+            "timestamp": now.isoformat(),
+            "anthropic_pct": pct,
+            "minutes_to_reset": minutes_left,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+        }
+
+        cal_dir = Path.home() / ".claude-monitor"
+        cal_dir.mkdir(parents=True, exist_ok=True)
+        cal_file = cal_dir / "calibration.json"
+        with open(cal_file, "w") as f:
+            json.dump(calibration, f, indent=2)
+
+        print(f"Calibration saved to {cal_file}")
+        print(f"  Anthropic: {pct}% used, resets in {minutes_left}min")
+        print(f"  Window: {window_start.strftime('%H:%M')} → {window_end.strftime('%H:%M')} UTC")
+        print(f"  Next calibration: run again when Anthropic page is open")
+        return 0
+
+    except (ValueError, IndexError) as e:
+        print(f"Error parsing calibration: {e}")
+        print("Usage: --calibrate 'PERCENT,MINUTES_LEFT' (e.g. '66,6')")
+        return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry point with direct pydantic-settings integration."""
     if argv is None:
@@ -134,6 +187,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         settings = Settings.load_with_last_used(argv)
+
+        # Handle calibration mode
+        if settings.calibrate and isinstance(settings.calibrate, str):
+            return _run_calibration(settings.calibrate)
 
         setup_environment()
         ensure_directories()
