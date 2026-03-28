@@ -278,23 +278,40 @@ class SessionDisplayComponent:
                 )
                 screen_buffer.append("")
 
-            # Per-agent breakdown
+            # Per-agent breakdown with segmented bar
             agent_stats = kwargs.get("agent_stats", {})
             if agent_stats and len(agent_stats) > 0:
                 total_agent_tokens = sum(agent_stats.values())
                 if total_agent_tokens > 0:
-                    # Sort by tokens descending
                     sorted_agents = sorted(agent_stats.items(), key=lambda x: x[1], reverse=True)
-                    agent_parts = []
-                    for agent, tokens in sorted_agents:
+                    bar_width = 50
+                    # Agent color palette
+                    agent_colors = ["warning", "info", "success", "error", "dim"]
+                    bar_segments = []
+                    label_parts = []
+                    remaining_width = bar_width
+
+                    for i, (agent, tokens) in enumerate(sorted_agents):
                         pct = (tokens / total_agent_tokens) * 100
-                        if pct >= 1.0:  # Only show agents with >= 1%
-                            agent_parts.append(f"[value]{agent}[/] {pct:.0f}%")
-                    if agent_parts:
-                        screen_buffer.append(
-                            f"👥 [value]Agents:[/]               {' · '.join(agent_parts)}"
-                        )
-                        screen_buffer.append("")
+                        if pct < 1.0:
+                            continue
+                        color = agent_colors[i % len(agent_colors)]
+                        seg_width = int(bar_width * tokens / total_agent_tokens)
+                        if i == 0:
+                            seg_width = remaining_width - sum(
+                                int(bar_width * t / total_agent_tokens)
+                                for _, t in sorted_agents[1:] if (t / total_agent_tokens) >= 0.01
+                            )
+                        remaining_width -= seg_width
+                        bar_segments.append(f"[{color}]{'█' * max(1, seg_width)}[/]")
+                        label_parts.append(f"{agent} {pct:.0f}%")
+
+                    bar_display = "".join(bar_segments)
+                    summary = " | ".join(label_parts)
+                    screen_buffer.append(
+                        f"👥 [value]Agent Distribution:[/]  👥 [{bar_display}] {summary}"
+                    )
+                    screen_buffer.append("")
 
             if per_model_stats:
                 model_bar = self.model_usage.render(per_model_stats)
