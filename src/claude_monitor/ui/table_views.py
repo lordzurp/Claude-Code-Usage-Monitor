@@ -40,7 +40,7 @@ class TableViewsController:
         self.border_style = "bright_blue"
 
     def _create_base_table(
-        self, title: str, period_column_name: str, period_column_width: int
+        self, title: str, period_column_name: str, period_column_width: int, **kwargs: Any
     ) -> Table:
         """Create a base table with common structure.
 
@@ -78,8 +78,9 @@ class TableViewsController:
         table.add_column(
             "Total Tokens", style=self.accent_style, justify="right", width=12
         )
+        cost_label = kwargs.get("cost_label", "Cost (USD)")
         table.add_column(
-            "Cost (USD)", style=self.success_style, justify="right", width=10
+            cost_label, style=self.success_style, justify="right", width=14
         )
 
         return table
@@ -143,6 +144,7 @@ class TableViewsController:
         daily_data: List[Dict[str, Any]],
         totals: Dict[str, Any],
         timezone: str = "UTC",
+        cost_label: str = "Cost (USD)",
     ) -> Table:
         """Create a daily statistics table.
 
@@ -150,6 +152,7 @@ class TableViewsController:
             daily_data: List of daily aggregated data
             totals: Total statistics
             timezone: Timezone for display
+            cost_label: Label for cost column
 
         Returns:
             Rich Table object
@@ -159,6 +162,7 @@ class TableViewsController:
             title=f"Claude Code Token Usage Report - Daily ({timezone})",
             period_column_name="Date",
             period_column_width=12,
+            cost_label=cost_label,
         )
 
         # Add data rows
@@ -174,6 +178,7 @@ class TableViewsController:
         monthly_data: List[Dict[str, Any]],
         totals: Dict[str, Any],
         timezone: str = "UTC",
+        cost_label: str = "Cost (USD)",
     ) -> Table:
         """Create a monthly statistics table.
 
@@ -181,6 +186,7 @@ class TableViewsController:
             monthly_data: List of monthly aggregated data
             totals: Total statistics
             timezone: Timezone for display
+            cost_label: Label for cost column
 
         Returns:
             Rich Table object
@@ -190,6 +196,7 @@ class TableViewsController:
             title=f"Claude Code Token Usage Report - Monthly ({timezone})",
             period_column_name="Month",
             period_column_width=10,
+            cost_label=cost_label,
         )
 
         # Add data rows
@@ -201,7 +208,8 @@ class TableViewsController:
         return table
 
     def create_summary_panel(
-        self, view_type: str, totals: Dict[str, Any], period: str
+        self, view_type: str, totals: Dict[str, Any], period: str,
+        is_subscription: bool = False,
     ) -> Panel:
         """Create a summary panel for the table view.
 
@@ -209,18 +217,23 @@ class TableViewsController:
             view_type: Type of view ('daily' or 'monthly')
             totals: Total statistics
             period: Period description
+            is_subscription: Whether the plan is a subscription (not API billing)
 
         Returns:
             Rich Panel object
         """
         # Create summary text
+        cost_label = "API Equivalent" if is_subscription else "Total Cost"
         summary_lines = [
             f"📊 {view_type.capitalize()} Usage Summary - {period}",
             "",
             f"Total Tokens: {format_number(totals['total_tokens'])}",
-            f"Total Cost: {format_currency(totals['total_cost'])}",
+            f"{cost_label}: {format_currency(totals['total_cost'])}",
             f"Entries: {format_number(totals['entries_count'])}",
         ]
+        if is_subscription:
+            summary_lines.append("")
+            summary_lines.append("ℹ️  Subscription plan — cost shown is API equivalent, not actual billing")
 
         summary_text = Text("\n".join(summary_lines), style=self.value_style)
 
@@ -293,6 +306,7 @@ class TableViewsController:
         totals: Dict[str, Any],
         view_type: str,
         timezone: str = "UTC",
+        cost_label: str = "Cost (USD)",
     ) -> Table:
         """Create a table for either daily or monthly aggregated data.
 
@@ -309,9 +323,9 @@ class TableViewsController:
             ValueError: If view_type is not 'daily' or 'monthly'
         """
         if view_type == "daily":
-            return self.create_daily_table(aggregate_data, totals, timezone)
+            return self.create_daily_table(aggregate_data, totals, timezone, cost_label=cost_label)
         elif view_type == "monthly":
-            return self.create_monthly_table(aggregate_data, totals, timezone)
+            return self.create_monthly_table(aggregate_data, totals, timezone, cost_label=cost_label)
         else:
             raise ValueError(f"Invalid view type: {view_type}")
 
@@ -365,11 +379,19 @@ class TableViewsController:
         else:  # monthly
             period = f"{data[0]['month']} to {data[-1]['month']}" if data else "No data"
 
+        # Determine cost label based on plan
+        is_subscription = plan in ["pro", "team", "max5", "max20"]
+        cost_label = "API Equiv." if is_subscription else "Cost (USD)"
+
         # Create and display summary panel
-        summary_panel = self.create_summary_panel(view_mode, totals, period)
+        summary_panel = self.create_summary_panel(
+            view_mode, totals, period, is_subscription=is_subscription
+        )
 
         # Create and display table
-        table = self.create_aggregate_table(data, totals, view_mode, timezone)
+        table = self.create_aggregate_table(
+            data, totals, view_mode, timezone, cost_label=cost_label
+        )
 
         # Display using console if provided
         if console:
