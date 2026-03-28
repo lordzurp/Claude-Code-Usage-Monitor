@@ -205,17 +205,6 @@ class SessionDisplayComponent:
             else:
                 screen_buffer.append("")
 
-            cost_percentage = (
-                min(100, percentage(session_cost, cost_limit_p90))
-                if cost_limit_p90 > 0
-                else 0
-            )
-            cost_bar = self._render_wide_progress_bar(cost_percentage)
-            screen_buffer.append(
-                f"💰 [value]Cost Usage:[/]           {cost_bar} {cost_percentage:4.1f}%    [value]${session_cost:.2f}[/] / [dim]${cost_limit_p90:.2f}[/]"
-            )
-            screen_buffer.append("")
-
             token_bar = self._render_wide_progress_bar(usage_percentage)
             screen_buffer.append(
                 f"📊 [value]Token Usage:[/]          {token_bar} {usage_percentage:4.1f}%    [value]{tokens_used:,}[/] / [dim]{token_limit:,}[/]"
@@ -247,6 +236,17 @@ class SessionDisplayComponent:
             )
             screen_buffer.append("")
 
+            # Weekly usage bar
+            weekly_data = kwargs.get("weekly_tokens", {})
+            if weekly_data:
+                weekly_total = weekly_data.get("total_tokens", 0)
+                weekly_reset_str = weekly_data.get("reset_time_str", "?")
+                # Display as token count with reset info (no % — we don't know the real limit)
+                screen_buffer.append(
+                    f"📅 [value]Weekly Usage:[/]          [warning]{weekly_total:,}[/] [dim]tokens since last reset[/] · [dim]resets {weekly_reset_str}[/]"
+                )
+                screen_buffer.append("")
+
             if per_model_stats:
                 model_bar = self.model_usage.render(per_model_stats)
                 screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {model_bar}")
@@ -258,16 +258,6 @@ class SessionDisplayComponent:
             velocity_emoji = VelocityIndicator.get_velocity_emoji(burn_rate)
             screen_buffer.append(
                 f"🔥 [value]Burn Rate:[/]              [warning]{burn_rate:.1f}[/] [dim]tokens/min[/] {velocity_emoji}"
-            )
-
-            cost_per_min = (
-                session_cost / max(1, elapsed_session_minutes)
-                if elapsed_session_minutes > 0
-                else 0
-            )
-            cost_per_min_display = CostIndicator.render(cost_per_min)
-            screen_buffer.append(
-                f"💲 [value]Cost Rate:[/]              {cost_per_min_display} [dim]$/min[/]"
             )
         else:
             cost_display = CostIndicator.render(session_cost)
@@ -322,10 +312,12 @@ class SessionDisplayComponent:
         )
         screen_buffer.append("")
 
+        # Suppress cost exceed notification for subscription plans
+        is_subscription = plan in ["pro", "team", "max5", "max20"]
         self._add_notifications(
             screen_buffer,
             show_switch_notification,
-            show_exceed_notification,
+            show_exceed_notification and not is_subscription,
             show_tokens_will_run_out,
             original_limit,
             token_limit,

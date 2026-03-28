@@ -60,9 +60,14 @@ def load_usage_entries(
     if hours_back:
         cutoff_time = datetime.now(tz.utc) - timedelta(hours=hours_back)
 
+    # Map each jsonl file to its source directory for agent tagging
+    file_to_agent: Dict[Path, str] = {}
     jsonl_files: List[Path] = []
     for scan_dir in scan_dirs:
-        jsonl_files.extend(_find_jsonl_files(scan_dir))
+        agent_id = _extract_agent_id(scan_dir)
+        for f in _find_jsonl_files(scan_dir):
+            jsonl_files.append(f)
+            file_to_agent[f] = agent_id
 
     if not jsonl_files:
         logger.warning("No JSONL files found in %s", scan_dirs)
@@ -82,6 +87,9 @@ def load_usage_entries(
             timezone_handler,
             pricing_calculator,
         )
+        agent_id = file_to_agent.get(file_path, "")
+        for entry in entries:
+            entry.agent_id = agent_id
         all_entries.extend(entries)
         if include_raw and raw_data:
             raw_entries.extend(raw_data)
@@ -121,6 +129,29 @@ def load_all_raw_entries(data_path: Optional[str] = None) -> List[Dict[str, Any]
             logger.exception(f"Error loading raw entries from {file_path}: {e}")
 
     return all_raw_entries
+
+
+def _extract_agent_id(scan_dir: Path) -> str:
+    """Extract agent ID from a scan directory path.
+
+    Derives the agent name from the parent of .claude/projects/.
+    E.g. /home/starfleet/.claude/projects -> 'starfleet'
+         ~/.claude/projects -> current username
+
+    Args:
+        scan_dir: Path to the Claude data directory
+
+    Returns:
+        Agent identifier string
+    """
+    resolved = scan_dir.resolve()
+    parts = resolved.parts
+    # Look for .claude in the path and take the directory before it
+    for i, part in enumerate(parts):
+        if part == ".claude" and i > 0:
+            return parts[i - 1]
+    # Fallback: use the parent directory name
+    return resolved.parent.name
 
 
 def _find_jsonl_files(data_path: Path) -> List[Path]:

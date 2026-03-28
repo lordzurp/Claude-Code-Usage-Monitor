@@ -270,6 +270,12 @@ class DisplayController:
             processed_data["cost_limit_p90"] = cost_limit_p90
             processed_data["messages_limit_p90"] = messages_limit_p90
 
+        # Calculate weekly totals from all blocks
+        weekly_tokens = _calculate_weekly_tokens(
+            data.get("blocks", []), current_time, args
+        )
+        processed_data["weekly_tokens"] = weekly_tokens
+
         try:
             screen_buffer = self.session_display.format_active_session_screen(
                 **processed_data
@@ -561,6 +567,70 @@ class ScreenBufferManager:
                 text_objects.append(line)
 
         return Group(*text_objects)
+
+
+def _calculate_weekly_tokens(
+    blocks: List[Dict[str, Any]], current_time: datetime, args: Any
+) -> Dict[str, Any]:
+    """Calculate total tokens since the weekly reset.
+
+    Args:
+        blocks: All session blocks
+        current_time: Current UTC time
+        args: CLI args (for reset_day and reset_time)
+
+    Returns:
+        Dict with weekly_total_tokens and weekly_reset_time
+    """
+    # Weekly reset: Monday 20:00 local time by default
+    # TODO: make configurable via --weekly-reset-day and --weekly-reset-time
+    reset_hour = 20
+    reset_weekday = 0  # Monday
+
+    tz_name = getattr(args, "timezone", "UTC")
+    try:
+        local_tz = pytz.timezone(tz_name)
+    except Exception:
+        local_tz = pytz.UTC
+
+    local_now = current_time.astimezone(local_tz)
+
+    # Find the most recent reset point (Monday 20:00 local)
+    days_since_reset = (local_now.weekday() - reset_weekday) % 7
+    reset_candidate = local_now.replace(
+        hour=reset_hour, minute=0, second=0, microsecond=0
+    ) - timedelta(days=days_since_reset)
+
+    if reset_candidate > local_now:
+        reset_candidate -= timedelta(weeks=1)
+
+    weekly_start = reset_candidate.astimezone(pytz.UTC)
+
+    # Next reset
+    next_reset = reset_candidate + timedelta(weeks=1)
+
+    # Sum tokens from all non-gap blocks since weekly_start
+    weekly_total = 0
+    for block in blocks:
+        if block.get("isGap", False):
+            continue
+        start_str = block.get("startTime", "")
+        if not start_str:
+            continue
+        try:
+            block_start = datetime.fromisoformat(start_str)
+            if block_start.tzinfo is None:
+                block_start = block_start.replace(tzinfo=pytz.UTC)
+            if block_start >= weekly_start:
+                weekly_total += block.get("totalTokens", 0)
+        except (ValueError, TypeError):
+            continue
+
+    return {
+        "total_tokens": weekly_total,
+        "reset_time": next_reset,
+        "reset_time_str": next_reset.strftime("%a %H:%M"),
+    }
 
 
 # Legacy functions for backward compatibility

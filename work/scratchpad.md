@@ -50,3 +50,21 @@ quand pytest passe ses propres arguments. Bug pré-existant, pas causé par nos 
 Workaround: ignore test_settings.py pour l'instant. Fix systémique nécessaire.
 
 Prochaine étape: fix pricing pour plans Pro/MAX (coût API vs quotas forfait)
+
+## 2026-03-28 04:36 — Comparaison Anthropic Usage vs Monitor
+
+Anthropic page: session 49% used, reset 1h24, weekly 27% all models, 3% Sonnet
+Monitor: cost 45.4%, tokens 3.2%, reset 4h23
+
+Écarts majeurs:
+- Le % d'utilisation Anthropic est une métrique composite interne, pas tokens ni cost API
+- Le reset time est calculé différemment (5h blocks vs fenêtre Anthropic)
+- Les quotas hebdo (tous modèles + Sonnet séparé) pas trackés
+- Les limites max5 dans plans.py (88k tokens, $35, 1000 msg) sont probablement fausses
+
+Conclusion: le monitor est utile pour burn rate live et distribution modèles,
+mais les barres de progression et prédictions sont décoratives — basées sur des
+limites approximatives, pas sur les vraies limites Anthropic.
+
+Fix possible: interroger l'API Anthropic pour les vraies limites ?
+Ou accepter que c'est une approximation et documenter la différence.
