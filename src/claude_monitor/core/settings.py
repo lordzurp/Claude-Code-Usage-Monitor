@@ -109,6 +109,12 @@ class Settings(BaseSettings):
         description="View mode (realtime, daily, monthly, session)",
     )
 
+    data_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Comma-separated list of Claude data directories to scan (e.g. /home/user1/.claude/projects,/home/user2/.claude/projects)",
+        json_schema_extra={"metavar": "PATHS"},
+    )
+
     @staticmethod
     def _get_system_timezone() -> str:
         """Lazy import to avoid circular dependencies."""
@@ -350,5 +356,6 @@ class Settings(BaseSettings):
         args.log_level = self.log_level
         args.log_file = str(self.log_file) if self.log_file else None
         args.version = self.version
+        args.data_paths = self.data_paths
 
         return args

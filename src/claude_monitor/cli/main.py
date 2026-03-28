@@ -120,21 +120,31 @@ def _run_monitoring(args: argparse.Namespace) -> None:
     live_display_active: bool = False
 
     try:
-        data_paths: List[Path] = discover_claude_data_paths()
+        # Resolve data paths: CLI --data-paths overrides auto-discovery
+        custom_data_paths: Optional[List[str]] = getattr(args, "data_paths", None)
+        data_paths: List[Path]
+        if custom_data_paths:
+            data_paths = discover_claude_data_paths(custom_data_paths)
+        else:
+            data_paths = discover_claude_data_paths()
+
         if not data_paths:
             print_themed("No Claude data directory found", style="error")
             return
 
-        data_path: Path = data_paths[0]
+        data_path_strs: List[str] = [str(p) for p in data_paths]
         logger = logging.getLogger(__name__)
-        logger.info(f"Using data path: {data_path}")
+        logger.info(f"Using data paths: {data_path_strs}")
 
         # Handle different view modes
         if view_mode in ["daily", "monthly"]:
-            _run_table_view(args, data_path, view_mode, console)
+            _run_table_view(args, data_paths[0], view_mode, console)
             return
 
-        token_limit: int = _get_initial_token_limit(args, str(data_path))
+        # data_paths takes priority over data_path in the reader
+        token_limit: int = _get_initial_token_limit(
+            args, data_path=str(data_paths[0]), data_paths=data_path_strs
+        )
 
         display_controller = DisplayController()
         display_controller.live_manager._console = console
@@ -167,7 +177,7 @@ def _run_monitoring(args: argparse.Namespace) -> None:
                 update_interval=(
                     args.refresh_rate if hasattr(args, "refresh_rate") else 10
                 ),
-                data_path=str(data_path),
+                data_paths=data_path_strs,
             )
             orchestrator.set_args(args)
 
@@ -261,9 +271,17 @@ def _run_monitoring(args: argparse.Namespace) -> None:
 
 
 def _get_initial_token_limit(
-    args: argparse.Namespace, data_path: Union[str, Path]
+    args: argparse.Namespace,
+    data_path: Union[str, Path] = "",
+    data_paths: Optional[List[str]] = None,
 ) -> int:
-    """Get initial token limit for the plan."""
+    """Get initial token limit for the plan.
+
+    Args:
+        args: CLI arguments
+        data_path: Single data path (fallback, used when data_paths is None)
+        data_paths: List of data paths (takes priority over data_path)
+    """
     logger = logging.getLogger(__name__)
     plan: str = getattr(args, "plan", PlanType.PRO.value)
 
@@ -288,6 +306,7 @@ def _get_initial_token_limit(
                 quick_start=False,
                 use_cache=False,
                 data_path=str(data_path),
+                data_paths=data_paths,
             )
 
             if usage_data and "blocks" in usage_data:

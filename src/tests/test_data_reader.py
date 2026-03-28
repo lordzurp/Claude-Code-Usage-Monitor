@@ -1743,3 +1743,76 @@ class TestDataProcessors:
         assert DataConverter.to_serializable("string") == "string"
         assert DataConverter.to_serializable(123) == 123
         assert DataConverter.to_serializable(True) is True
+
+
+class TestMultiPathLoading:
+    """Integration tests for multi-path data loading."""
+
+    def _write_jsonl_entry(self, path: Path, timestamp_iso: str, model: str = "claude-sonnet-4-20250514") -> None:
+        """Write a minimal valid JSONL entry to a file."""
+        entry = {
+            "timestamp": timestamp_iso,
+            "message": {"id": f"msg-{hash(timestamp_iso) % 10000}", "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }, "model": model},
+            "costUSD": 0.001,
+            "request_id": f"req-{hash(timestamp_iso) % 10000}",
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def test_load_from_multiple_directories(self, tmp_path: Path) -> None:
+        """Entries from multiple directories are loaded and merged."""
+        dir_a = tmp_path / "agent_a" / "projects" / "abc123"
+        dir_b = tmp_path / "agent_b" / "projects" / "def456"
+
+        self._write_jsonl_entry(dir_a / "usage.jsonl", "2026-03-28T10:00:00Z")
+        self._write_jsonl_entry(dir_b / "usage.jsonl", "2026-03-28T11:00:00Z")
+
+        entries, _ = load_usage_entries(
+            data_paths=[str(tmp_path / "agent_a" / "projects"), str(tmp_path / "agent_b" / "projects")]
+        )
+
+        assert len(entries) == 2
+        assert entries[0].timestamp < entries[1].timestamp
+
+    def test_multi_path_empty_dir_ignored(self, tmp_path: Path) -> None:
+        """Empty directories don't cause errors."""
+        dir_a = tmp_path / "agent_a" / "projects" / "abc123"
+        dir_b = tmp_path / "agent_b" / "projects"
+        dir_b.mkdir(parents=True)
+
+        self._write_jsonl_entry(dir_a / "usage.jsonl", "2026-03-28T10:00:00Z")
+
+        entries, _ = load_usage_entries(
+            data_paths=[str(tmp_path / "agent_a" / "projects"), str(dir_b)]
+        )
+
+        assert len(entries) == 1
+
+    def test_multi_path_nonexistent_dir_ignored(self, tmp_path: Path) -> None:
+        """Non-existent directories don't cause errors."""
+        dir_a = tmp_path / "agent_a" / "projects" / "abc123"
+        self._write_jsonl_entry(dir_a / "usage.jsonl", "2026-03-28T10:00:00Z")
+
+        entries, _ = load_usage_entries(
+            data_paths=[str(tmp_path / "agent_a" / "projects"), "/nonexistent/path"]
+        )
+
+        assert len(entries) == 1
+
+    def test_data_paths_overrides_data_path(self, tmp_path: Path) -> None:
+        """data_paths takes priority over data_path when both provided."""
+        dir_a = tmp_path / "agent_a" / "projects" / "abc123"
+        self._write_jsonl_entry(dir_a / "usage.jsonl", "2026-03-28T10:00:00Z")
+
+        entries, _ = load_usage_entries(
+            data_path="/nonexistent/should/be/ignored",
+            data_paths=[str(tmp_path / "agent_a" / "projects")]
+        )
+
+        assert len(entries) == 1

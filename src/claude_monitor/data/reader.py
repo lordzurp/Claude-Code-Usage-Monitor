@@ -34,6 +34,7 @@ def load_usage_entries(
     hours_back: Optional[int] = None,
     mode: CostMode = CostMode.AUTO,
     include_raw: bool = False,
+    data_paths: Optional[List[str]] = None,
 ) -> Tuple[List[UsageEntry], Optional[List[Dict[str, Any]]]]:
     """Load and convert JSONL files to UsageEntry objects.
 
@@ -42,11 +43,16 @@ def load_usage_entries(
         hours_back: Only include entries from last N hours
         mode: Cost calculation mode
         include_raw: Whether to return raw JSON data alongside entries
+        data_paths: List of paths to scan (overrides data_path if provided)
 
     Returns:
         Tuple of (usage_entries, raw_data) where raw_data is None unless include_raw=True
     """
-    data_path = Path(data_path if data_path else "~/.claude/projects").expanduser()
+    if data_paths:
+        scan_dirs = [Path(p).expanduser() for p in data_paths]
+    else:
+        scan_dirs = [Path(data_path if data_path else "~/.claude/projects").expanduser()]
+
     timezone_handler = TimezoneHandler()
     pricing_calculator = PricingCalculator()
 
@@ -54,9 +60,12 @@ def load_usage_entries(
     if hours_back:
         cutoff_time = datetime.now(tz.utc) - timedelta(hours=hours_back)
 
-    jsonl_files = _find_jsonl_files(data_path)
+    jsonl_files: List[Path] = []
+    for scan_dir in scan_dirs:
+        jsonl_files.extend(_find_jsonl_files(scan_dir))
+
     if not jsonl_files:
-        logger.warning("No JSONL files found in %s", data_path)
+        logger.warning("No JSONL files found in %s", scan_dirs)
         return [], None
 
     all_entries: List[UsageEntry] = []
