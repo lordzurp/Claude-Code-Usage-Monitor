@@ -99,9 +99,9 @@ class Settings(BaseSettings):
         cli_implicit_flags=True,
     )
 
-    plan: Literal["pro", "max5", "max20", "custom"] = Field(
+    plan: Literal["pro", "team", "max5", "max20", "custom"] = Field(
         default="custom",
-        description="Plan type (pro, max5, max20, custom)",
+        description="Plan type (pro, team, max5, max20, custom)",
     )
 
     view: Literal["realtime", "daily", "monthly", "session"] = Field(
@@ -182,7 +182,7 @@ class Settings(BaseSettings):
         """Validate and normalize plan value."""
         if isinstance(v, str):
             v_lower = v.lower()
-            valid_plans = ["pro", "max5", "max20", "custom"]
+            valid_plans = ["pro", "team", "max5", "max20", "custom"]
             if v_lower in valid_plans:
                 return v_lower
             raise ValueError(
@@ -275,31 +275,51 @@ class Settings(BaseSettings):
 
         clear_config = argv and "--clear" in argv
 
+        # Parse CLI arguments manually
+        cli_args = {}
+        cli_provided_fields = set()
+        if argv:
+            i = 0
+            while i < len(argv):
+                arg = argv[i]
+                if arg.startswith("--"):
+                    field_name = arg[2:].replace("-", "_")
+                    if field_name in cls.model_fields:
+                        cli_provided_fields.add(field_name)
+                        # Check if this is a boolean flag or requires a value
+                        if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                            # Has a value
+                            cli_args[field_name] = argv[i + 1]
+                            i += 2
+                        else:
+                            # Boolean flag
+                            cli_args[field_name] = True
+                            i += 1
+                    else:
+                        i += 1
+                else:
+                    i += 1
+
         if clear_config:
             last_used = LastUsedParams()
             last_used.clear()
-            settings = cls(_cli_parse_args=argv)
+            settings = cls(**cli_args)
         else:
             last_used = LastUsedParams()
             last_params = last_used.load()
 
-            settings = cls(_cli_parse_args=argv)
-
-            cli_provided_fields = set()
-            if argv:
-                for _i, arg in enumerate(argv):
-                    if arg.startswith("--"):
-                        field_name = arg[2:].replace("-", "_")
-                        if field_name in cls.model_fields:
-                            cli_provided_fields.add(field_name)
-
+            # Merge last_params with cli_args, CLI args take precedence
+            merged_args = {}
             for key, value in last_params.items():
                 if key == "plan":
                     continue
-                if not hasattr(settings, key):
-                    continue
                 if key not in cli_provided_fields:
-                    setattr(settings, key, value)
+                    merged_args[key] = value
+
+            # Add CLI args (they override last_params)
+            merged_args.update(cli_args)
+
+            settings = cls(**merged_args)
 
             if (
                 "plan" in cli_provided_fields
