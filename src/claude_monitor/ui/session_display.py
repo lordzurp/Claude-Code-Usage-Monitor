@@ -94,6 +94,37 @@ class SessionDisplayComponent:
 
         return f"{color} [{filled_bar}]"
 
+    def format_compact_session_screen(self, data: SessionDisplayData) -> list[str]:
+        """Format a single-line compact display for tmux/status bars.
+
+        Args:
+            data: SessionDisplayData object
+
+        Returns:
+            Screen buffer with one compact line
+        """
+        time_remaining = max(0, data.total_session_minutes - data.elapsed_session_minutes)
+        time_h = int(time_remaining // 60)
+        time_m = int(time_remaining % 60)
+
+        parts = [
+            f"📊 {data.tokens_used:,}/{data.token_limit:,} ({data.usage_percentage:.0f}%)",
+            f"🔥 {data.burn_rate:.0f}t/m",
+            f"⏱️ {time_h}h{time_m:02d}m",
+            f"📨 {data.sent_messages}msg",
+        ]
+        if data.predicted_end_str:
+            parts.append(f"→ {data.predicted_end_str}")
+
+        return [" | ".join(parts)]
+
+    def format_compact_no_active_session_screen(
+        self, plan: str, timezone: str, token_limit: int,
+        current_time, args
+    ) -> list[str]:
+        """Compact display when no active session."""
+        return [f"📊 0/{token_limit:,} (0%) | No active session | {plan}"]
+
     def format_active_session_screen_v2(self, data: SessionDisplayData) -> list[str]:
         """Format complete active session screen using data class.
 

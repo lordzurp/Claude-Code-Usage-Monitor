@@ -121,6 +121,16 @@ class Settings(BaseSettings):
         json_schema_extra={"metavar": "PATTERN"},
     )
 
+    compact: bool = Field(
+        default=False,
+        description="Enable compact single-line display mode for status bars and tmux",
+    )
+
+    compact_fields: Optional[List[str]] = Field(
+        default=None,
+        description="Comma-separated fields for compact mode (tokens,percentage,burn_rate,predicted_end,reset_time,current_time)",
+    )
+
     @staticmethod
     def _get_system_timezone() -> str:
         """Lazy import to avoid circular dependencies."""
@@ -382,5 +392,7 @@ class Settings(BaseSettings):
         args.version = self.version
         args.data_paths = self.data_paths
         args.scan_homes = self.scan_homes
+        args.compact = self.compact
+        args.compact_fields = self.compact_fields
 
         return args

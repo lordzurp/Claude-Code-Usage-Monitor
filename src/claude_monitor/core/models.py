@@ -7,6 +7,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field as PydanticField, field_validator
+
 
 class CostMode(Enum):
     """Cost calculation modes for token usage analysis."""
@@ -108,6 +110,22 @@ class SessionBlock:
         else:
             duration = (self.end_time - self.start_time).total_seconds() / 60
         return max(duration, 1.0)
+
+
+class CompactColorThresholds(BaseModel):
+    """Color thresholds for compact display mode."""
+
+    low_threshold: float = PydanticField(default=50.0, ge=0.0, le=100.0)
+    high_threshold: float = PydanticField(default=80.0, ge=0.0, le=100.0)
+    burn_rate_critical: float = PydanticField(default=80.0, ge=0.0, le=100.0)
+
+    @field_validator("high_threshold")
+    @classmethod
+    def validate_high_threshold(cls, v: float, info) -> float:
+        """Ensure high threshold is greater than low threshold."""
+        if "low_threshold" in info.data and v <= info.data["low_threshold"]:
+            raise ValueError("high_threshold must be greater than low_threshold")
+        return v
 
 
 def normalize_model_name(model: str) -> str:
