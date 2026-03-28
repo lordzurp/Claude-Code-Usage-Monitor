@@ -590,7 +590,7 @@ class TestSettings:
             MockLastUsed.return_value = mock_instance
 
             # Test various plan values
-            for plan in ["pro", "max5", "max20"]:
+            for plan in ["pro", "team", "max5", "max20"]:
                 settings = Settings.load_with_last_used(["--plan", plan])
                 assert settings.plan == plan
 

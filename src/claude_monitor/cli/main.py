@@ -196,6 +196,12 @@ def _run_monitoring(args: argparse.Namespace) -> None:
 
         # Handle different view modes
         if view_mode in ["daily", "monthly"]:
+            if len(data_paths) > 1:
+                print_themed(
+                    f"Note: table view uses first data path only ({data_paths[0]}). "
+                    "Use realtime view for multi-directory aggregation.",
+                    style="warning",
+                )
             _run_table_view(args, data_paths[0], view_mode, console)
             return
 

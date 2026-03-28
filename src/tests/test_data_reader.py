@@ -1748,18 +1748,22 @@ class TestDataProcessors:
 class TestMultiPathLoading:
     """Integration tests for multi-path data loading."""
 
+    _entry_counter = 0
+
     def _write_jsonl_entry(self, path: Path, timestamp_iso: str, model: str = "claude-sonnet-4-20250514") -> None:
         """Write a minimal valid JSONL entry to a file."""
+        TestMultiPathLoading._entry_counter += 1
+        seq = TestMultiPathLoading._entry_counter
         entry = {
             "timestamp": timestamp_iso,
-            "message": {"id": f"msg-{hash(timestamp_iso) % 10000}", "usage": {
+            "message": {"id": f"msg-test-{seq}", "usage": {
                 "input_tokens": 100,
                 "output_tokens": 50,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
             }, "model": model},
             "costUSD": 0.001,
-            "request_id": f"req-{hash(timestamp_iso) % 10000}",
+            "request_id": f"req-test-{seq}",
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:

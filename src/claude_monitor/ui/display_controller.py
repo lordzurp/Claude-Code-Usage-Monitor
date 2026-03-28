@@ -599,10 +599,12 @@ def _calculate_weekly_tokens(
     local_now = current_time.astimezone(local_tz)
 
     # Find the most recent reset point (Monday 20:00 local)
+    # Use localize() for DST-safe wall-clock time construction
     days_since_reset = (local_now.weekday() - reset_weekday) % 7
-    reset_candidate = local_now.replace(
+    naive_reset = (local_now.replace(
         hour=reset_hour, minute=0, second=0, microsecond=0
-    ) - timedelta(days=days_since_reset)
+    ) - timedelta(days=days_since_reset)).replace(tzinfo=None)
+    reset_candidate = local_tz.localize(naive_reset)
 
     if reset_candidate > local_now:
         reset_candidate -= timedelta(weeks=1)
@@ -610,24 +612,33 @@ def _calculate_weekly_tokens(
     weekly_start = reset_candidate.astimezone(pytz.UTC)
 
     # Next reset
-    next_reset = reset_candidate + timedelta(weeks=1)
+    naive_next = (naive_reset + timedelta(weeks=1))
+    next_reset = local_tz.localize(naive_next)
 
-    # Sum tokens from all non-gap blocks since weekly_start
+    # Sum tokens from individual entries since weekly_start
+    # (not blocks — a block straddling the reset boundary would be
+    # fully counted or fully missed otherwise)
     weekly_total = 0
     for block in blocks:
         if block.get("isGap", False):
             continue
-        start_str = block.get("startTime", "")
-        if not start_str:
-            continue
-        try:
-            block_start = datetime.fromisoformat(start_str)
-            if block_start.tzinfo is None:
-                block_start = block_start.replace(tzinfo=pytz.UTC)
-            if block_start >= weekly_start:
-                weekly_total += block.get("totalTokens", 0)
-        except (ValueError, TypeError):
-            continue
+        for entry in block.get("entries", []):
+            ts_str = entry.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                entry_ts = datetime.fromisoformat(ts_str)
+                if entry_ts.tzinfo is None:
+                    entry_ts = entry_ts.replace(tzinfo=pytz.UTC)
+                if entry_ts >= weekly_start:
+                    weekly_total += (
+                        entry.get("inputTokens", 0)
+                        + entry.get("outputTokens", 0)
+                        + entry.get("cacheCreationTokens", 0)
+                        + entry.get("cacheReadInputTokens", 0)
+                    )
+            except (ValueError, TypeError):
+                continue
 
     return {
         "total_tokens": weekly_total,
