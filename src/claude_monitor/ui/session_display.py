@@ -23,6 +23,17 @@ from claude_monitor.utils.time_utils import (
 )
 
 
+def _humanize_tokens(count: int) -> str:
+    """Format token count in human-readable short form (e.g. 10.2Mt, 1.5kt)."""
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}Mt"
+    elif count >= 10_000:
+        return f"{count / 1_000:.1f}kt"
+    elif count >= 1_000:
+        return f"{count / 1_000:.1f}kt"
+    return f"{count:,}t"
+
+
 @dataclass
 class SessionDisplayData:
     """Data container for session display information.
@@ -233,12 +244,15 @@ class SessionDisplayComponent:
                     "[dim]Based on your historical usage patterns when hitting limits (P90)[/dim]"
                 )
                 screen_buffer.append(f"[separator]{'─' * 60}[/]")
-            else:
-                screen_buffer.append("")
 
             token_bar = self._render_wide_progress_bar(usage_percentage)
+            tokens_display = _humanize_tokens(tokens_used)
+            limit_display = _humanize_tokens(token_limit)
             screen_buffer.append(
-                f"📊 [value]Token Usage:[/]          {token_bar} {usage_percentage:4.1f}%    [value]{tokens_used:,}[/] / [dim]{token_limit:,}[/]"
+                f"📊 [value]Token Usage:[/]    {token_bar}"
+            )
+            screen_buffer.append(
+                f"   {usage_percentage:4.1f}%    [value]{tokens_display}[/] / [dim]{limit_display}[/]"
             )
             screen_buffer.append("")
 
@@ -249,7 +263,10 @@ class SessionDisplayComponent:
             )
             messages_bar = self._render_wide_progress_bar(messages_percentage)
             screen_buffer.append(
-                f"📨 [value]Messages Usage:[/]       {messages_bar} {messages_percentage:4.1f}%    [value]{sent_messages}[/] / [dim]{messages_limit_p90:,}[/]"
+                f"📨 [value]Messages Usage:[/] {messages_bar}"
+            )
+            screen_buffer.append(
+                f"   {messages_percentage:4.1f}%    [value]{sent_messages}[/] / [dim]{messages_limit_p90:,}[/]"
             )
             screen_buffer.append(f"[separator]{'─' * 60}[/]")
 
@@ -263,7 +280,10 @@ class SessionDisplayComponent:
             time_left_hours = int(time_remaining // 60)
             time_left_mins = int(time_remaining % 60)
             screen_buffer.append(
-                f"⏱️  [value]Time to Reset:[/]       {time_bar} {time_left_hours}h {time_left_mins}m"
+                f"⏱️  [value]Time to Reset:[/]  {time_bar}"
+            )
+            screen_buffer.append(
+                f"   {time_left_hours}h {time_left_mins}m"
             )
             screen_buffer.append("")
 
@@ -272,9 +292,9 @@ class SessionDisplayComponent:
             if weekly_data:
                 weekly_total = weekly_data.get("total_tokens", 0)
                 weekly_reset_str = weekly_data.get("reset_time_str", "?")
-                # Display as token count with reset info (no % — we don't know the real limit)
+                weekly_display = _humanize_tokens(weekly_total)
                 screen_buffer.append(
-                    f"📅 [value]Weekly Usage:[/]          [warning]{weekly_total:,}[/] [dim]tokens since last reset[/] · [dim]resets {weekly_reset_str}[/]"
+                    f"📅 [value]Weekly Usage:[/]          [warning]{weekly_display}[/] [dim]since reset[/] · [dim]resets {weekly_reset_str}[/]"
                 )
                 screen_buffer.append("")
 
@@ -309,16 +329,22 @@ class SessionDisplayComponent:
                     bar_display = "".join(bar_segments)
                     summary = " | ".join(label_parts)
                     screen_buffer.append(
-                        f"👥 [value]Agent Distribution:[/]  👥 [{bar_display}] {summary}"
+                        f"👥 [value]Agent Distribution:[/]  [{bar_display}]"
+                    )
+                    screen_buffer.append(
+                        f"   {summary}"
                     )
                     screen_buffer.append("")
 
             if per_model_stats:
                 model_bar = self.model_usage.render(per_model_stats)
-                screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {model_bar}")
             else:
                 model_bar = self.model_usage.render({})
-                screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {model_bar}")
+            for line in model_bar.split("\n"):
+                if line.startswith("["):
+                    screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {line}")
+                else:
+                    screen_buffer.append(line)
             screen_buffer.append(f"[separator]{'─' * 60}[/]")
 
             velocity_emoji = VelocityIndicator.get_velocity_emoji(burn_rate)
