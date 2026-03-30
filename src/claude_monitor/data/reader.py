@@ -34,6 +34,7 @@ def load_usage_entries(
     hours_back: Optional[int] = None,
     mode: CostMode = CostMode.AUTO,
     include_raw: bool = False,
+    data_paths: Optional[List[str]] = None,
 ) -> Tuple[List[UsageEntry], Optional[List[Dict[str, Any]]]]:
     """Load and convert JSONL files to UsageEntry objects.
 
@@ -42,11 +43,16 @@ def load_usage_entries(
         hours_back: Only include entries from last N hours
         mode: Cost calculation mode
         include_raw: Whether to return raw JSON data alongside entries
+        data_paths: List of paths to scan (overrides data_path if provided)
 
     Returns:
         Tuple of (usage_entries, raw_data) where raw_data is None unless include_raw=True
     """
-    data_path = Path(data_path if data_path else "~/.claude/projects").expanduser()
+    if data_paths:
+        scan_dirs = [Path(p).expanduser() for p in data_paths]
+    else:
+        scan_dirs = [Path(data_path if data_path else "~/.claude/projects").expanduser()]
+
     timezone_handler = TimezoneHandler()
     pricing_calculator = PricingCalculator()
 
@@ -54,9 +60,19 @@ def load_usage_entries(
     if hours_back:
         cutoff_time = datetime.now(tz.utc) - timedelta(hours=hours_back)
 
-    jsonl_files = _find_jsonl_files(data_path)
+    # Map each jsonl file to its source directory for agent tagging
+    # Use dict to deduplicate overlapping scan directories
+    file_to_agent: Dict[Path, str] = {}
+    for scan_dir in scan_dirs:
+        agent_id = _extract_agent_id(scan_dir)
+        for f in _find_jsonl_files(scan_dir):
+            resolved = f.resolve()
+            if resolved not in file_to_agent:
+                file_to_agent[resolved] = agent_id
+    jsonl_files: List[Path] = list(file_to_agent.keys())
+
     if not jsonl_files:
-        logger.warning("No JSONL files found in %s", data_path)
+        logger.warning("No JSONL files found in %s", scan_dirs)
         return [], None
 
     all_entries: List[UsageEntry] = []
@@ -73,6 +89,9 @@ def load_usage_entries(
             timezone_handler,
             pricing_calculator,
         )
+        agent_id = file_to_agent.get(file_path, "")
+        for entry in entries:
+            entry.agent_id = agent_id
         all_entries.extend(entries)
         if include_raw and raw_data:
             raw_entries.extend(raw_data)
@@ -112,6 +131,29 @@ def load_all_raw_entries(data_path: Optional[str] = None) -> List[Dict[str, Any]
             logger.exception(f"Error loading raw entries from {file_path}: {e}")
 
     return all_raw_entries
+
+
+def _extract_agent_id(scan_dir: Path) -> str:
+    """Extract agent ID from a scan directory path.
+
+    Derives the agent name from the parent of .claude/projects/.
+    E.g. /home/starfleet/.claude/projects -> 'starfleet'
+         ~/.claude/projects -> current username
+
+    Args:
+        scan_dir: Path to the Claude data directory
+
+    Returns:
+        Agent identifier string
+    """
+    resolved = scan_dir.resolve()
+    parts = resolved.parts
+    # Look for .claude in the path and take the directory before it
+    for i, part in enumerate(parts):
+        if part == ".claude" and i > 0:
+            return parts[i - 1]
+    # Fallback: use the parent directory name
+    return resolved.parent.name
 
 
 def _find_jsonl_files(data_path: Path) -> List[Path]:

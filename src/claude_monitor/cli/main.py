@@ -2,7 +2,9 @@
 
 import argparse
 import contextlib
+import glob
 import logging
+import os
 import signal
 import sys
 import time
@@ -42,8 +44,33 @@ SessionChangeCallback = Callable[[str, str, Optional[Dict[str, Any]]], None]
 
 
 def get_standard_claude_paths() -> List[str]:
-    """Get list of standard Claude data directory paths to check."""
-    return ["~/.claude/projects", "~/.config/claude/projects"]
+    """Get list of standard Claude data directory paths to check.
+    
+    Now supports CLAUDE_CONFIG_DIR environment variable for Claude Code compatibility.
+    """
+    paths = []
+    
+    # Check CLAUDE_CONFIG_DIR first (Claude Code standard)
+    claude_config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if claude_config_dir:
+        # For Claude Code, the data is directly in CLAUDE_CONFIG_DIR/.claude
+        config_path = Path(claude_config_dir).expanduser()
+        if config_path.name == ".claude":
+            # If CLAUDE_CONFIG_DIR already points to .claude, use it directly
+            paths.append(str(config_path))
+        else:
+            # Otherwise, append .claude
+            paths.append(str(config_path / ".claude"))
+    
+    # Also check current directory for .claude (when running from within .claude dir)
+    cwd_claude = Path.cwd()
+    if cwd_claude.name == ".claude" and cwd_claude.exists():
+        paths.append(str(cwd_claude))
+    
+    # Fall back to original paths and Claude Code's default location
+    paths.extend(["~/.claude/projects", "~/.config/claude/projects", "~/.claude"])
+    
+    return paths
 
 
 def discover_claude_data_paths(custom_paths: Optional[List[str]] = None) -> List[Path]:
@@ -69,6 +96,86 @@ def discover_claude_data_paths(custom_paths: Optional[List[str]] = None) -> List
     return discovered_paths
 
 
+def _scan_homes_for_claude_data(pattern: str) -> List[str]:
+    """Scan directories matching a glob pattern for Claude data.
+
+    Looks for .claude/projects/ under each matched directory.
+
+    Args:
+        pattern: Glob pattern (e.g. '/home/*', '/Users/*')
+
+    Returns:
+        List of discovered Claude data directory paths
+    """
+    logger = logging.getLogger(__name__)
+    discovered: List[str] = []
+
+    for home_dir in sorted(glob.glob(pattern)):
+        claude_projects = Path(home_dir) / ".claude" / "projects"
+        try:
+            if claude_projects.is_dir():
+                discovered.append(str(claude_projects))
+                logger.info(f"scan-homes: found {claude_projects}")
+        except PermissionError:
+            logger.debug(f"scan-homes: permission denied on {home_dir}, skipping")
+
+    logger.info(f"scan-homes: {len(discovered)} directories from pattern '{pattern}'")
+    return discovered
+
+
+def _run_calibration(calibrate_str: str) -> int:
+    """Run calibration from Anthropic usage page data.
+
+    Parses 'PERCENT,MINUTES_LEFT', calculates the real window start,
+    and saves to ~/.claude-monitor/calibration.json.
+
+    Args:
+        calibrate_str: String like '66,6' (66% used, 6 min to reset)
+
+    Returns:
+        Exit code
+    """
+    import json
+
+    try:
+        parts = calibrate_str.split(",")
+        if len(parts) != 2:
+            print("Error: --calibrate expects 'PERCENT,MINUTES_LEFT' (e.g. '66,6')")
+            return 1
+
+        pct = float(parts[0].strip().rstrip("%"))
+        minutes_left = float(parts[1].strip().rstrip("m").rstrip("min"))
+
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(minutes=minutes_left)
+        window_start = window_end - timedelta(hours=5)
+
+        calibration = {
+            "timestamp": now.isoformat(),
+            "anthropic_pct": pct,
+            "minutes_to_reset": minutes_left,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+        }
+
+        cal_dir = Path.home() / ".claude-monitor"
+        cal_dir.mkdir(parents=True, exist_ok=True)
+        cal_file = cal_dir / "calibration.json"
+        with open(cal_file, "w") as f:
+            json.dump(calibration, f, indent=2)
+
+        print(f"Calibration saved to {cal_file}")
+        print(f"  Anthropic: {pct}% used, resets in {minutes_left}min")
+        print(f"  Window: {window_start.strftime('%H:%M')} → {window_end.strftime('%H:%M')} UTC")
+        print(f"  Next calibration: run again when Anthropic page is open")
+        return 0
+
+    except (ValueError, IndexError) as e:
+        print(f"Error parsing calibration: {e}")
+        print("Usage: --calibrate 'PERCENT,MINUTES_LEFT' (e.g. '66,6')")
+        return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry point with direct pydantic-settings integration."""
     if argv is None:
@@ -80,6 +187,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         settings = Settings.load_with_last_used(argv)
+
+        # Handle calibration mode
+        if settings.calibrate and isinstance(settings.calibrate, str):
+            return _run_calibration(settings.calibrate)
 
         setup_environment()
         ensure_directories()
@@ -120,21 +231,41 @@ def _run_monitoring(args: argparse.Namespace) -> None:
     live_display_active: bool = False
 
     try:
-        data_paths: List[Path] = discover_claude_data_paths()
+        # Resolve data paths: --scan-homes > --data-paths > auto-discovery
+        scan_homes_pattern: Optional[str] = getattr(args, "scan_homes", None)
+        custom_data_paths: Optional[List[str]] = getattr(args, "data_paths", None)
+        data_paths: List[Path]
+        if scan_homes_pattern and isinstance(scan_homes_pattern, str):
+            scanned = _scan_homes_for_claude_data(scan_homes_pattern)
+            data_paths = discover_claude_data_paths(scanned) if scanned else []
+        elif custom_data_paths:
+            data_paths = discover_claude_data_paths(custom_data_paths)
+        else:
+            data_paths = discover_claude_data_paths()
+
         if not data_paths:
             print_themed("No Claude data directory found", style="error")
             return
 
-        data_path: Path = data_paths[0]
+        data_path_strs: List[str] = [str(p) for p in data_paths]
         logger = logging.getLogger(__name__)
-        logger.info(f"Using data path: {data_path}")
+        logger.info(f"Using data paths: {data_path_strs}")
 
         # Handle different view modes
         if view_mode in ["daily", "monthly"]:
-            _run_table_view(args, data_path, view_mode, console)
+            if len(data_paths) > 1:
+                print_themed(
+                    f"Note: table view uses first data path only ({data_paths[0]}). "
+                    "Use realtime view for multi-directory aggregation.",
+                    style="warning",
+                )
+            _run_table_view(args, data_paths[0], view_mode, console)
             return
 
-        token_limit: int = _get_initial_token_limit(args, str(data_path))
+        # data_paths takes priority over data_path in the reader
+        token_limit: int = _get_initial_token_limit(
+            args, data_path=str(data_paths[0]), data_paths=data_path_strs
+        )
 
         display_controller = DisplayController()
         display_controller.live_manager._console = console
@@ -167,7 +298,7 @@ def _run_monitoring(args: argparse.Namespace) -> None:
                 update_interval=(
                     args.refresh_rate if hasattr(args, "refresh_rate") else 10
                 ),
-                data_path=str(data_path),
+                data_paths=data_path_strs,
             )
             orchestrator.set_args(args)
 
@@ -261,9 +392,17 @@ def _run_monitoring(args: argparse.Namespace) -> None:
 
 
 def _get_initial_token_limit(
-    args: argparse.Namespace, data_path: Union[str, Path]
+    args: argparse.Namespace,
+    data_path: Union[str, Path] = "",
+    data_paths: Optional[List[str]] = None,
 ) -> int:
-    """Get initial token limit for the plan."""
+    """Get initial token limit for the plan.
+
+    Args:
+        args: CLI arguments
+        data_path: Single data path (fallback, used when data_paths is None)
+        data_paths: List of data paths (takes priority over data_path)
+    """
     logger = logging.getLogger(__name__)
     plan: str = getattr(args, "plan", PlanType.PRO.value)
 
@@ -288,6 +427,7 @@ def _get_initial_token_limit(
                 quick_start=False,
                 use_cache=False,
                 data_path=str(data_path),
+                data_paths=data_paths,
             )
 
             if usage_data and "blocks" in usage_data:

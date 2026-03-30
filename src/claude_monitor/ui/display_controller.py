@@ -13,8 +13,14 @@ from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.text import Text
 
+from claude_monitor.compact import (
+    CompactColorManager,
+    CompactFieldSelector,
+    CompactRefreshManager,
+    EnhancedCompactFormatter,
+)
 from claude_monitor.core.calculations import calculate_hourly_burn_rate
-from claude_monitor.core.models import normalize_model_name
+from claude_monitor.core.models import CompactColorThresholds, normalize_model_name
 from claude_monitor.core.plans import Plans
 from claude_monitor.ui.components import (
     AdvancedCustomLimitDisplay,
@@ -48,6 +54,10 @@ class DisplayController:
         config_dir = Path.home() / ".claude" / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         self.notification_manager = NotificationManager(config_dir)
+        self._enhanced_compact_formatter: Optional[EnhancedCompactFormatter] = None
+        self._compact_refresh_manager: Optional[CompactRefreshManager] = None
+        self._compact_field_selector = None
+        self._compact_color_manager: Optional[CompactColorManager] = None
 
     def _extract_session_data(self, active_block: Dict[str, Any]) -> Dict[str, Any]:
         """Extract basic session data from active block."""
@@ -89,7 +99,9 @@ class DisplayController:
         if Plans.is_valid_plan(args.plan) and cost_limit_p90 is not None:
             cost_limit = cost_limit_p90
         else:
-            cost_limit = 100.0  # Default
+            cost_limit = Plans.get_cost_limit(
+                getattr(args, "plan", "pro")
+            )
 
         return self.session_calculator.calculate_cost_predictions(
             session_data, time_data, cost_limit
@@ -225,9 +237,15 @@ class DisplayController:
         current_time = datetime.now(pytz.UTC)
 
         if not active_block:
-            screen_buffer = self.session_display.format_no_active_session_screen(
-                args.plan, args.timezone, token_limit, current_time, args
-            )
+            compact_mode = getattr(args, "compact", False) is True
+            if compact_mode:
+                screen_buffer = self.session_display.format_compact_no_active_session_screen(
+                    args.plan, args.timezone, token_limit, current_time, args
+                )
+            else:
+                screen_buffer = self.session_display.format_no_active_session_screen(
+                    args.plan, args.timezone, token_limit, current_time, args
+                )
             return self.buffer_manager.create_screen_renderable(screen_buffer)
 
         cost_limit_p90 = None
@@ -268,10 +286,53 @@ class DisplayController:
             processed_data["cost_limit_p90"] = cost_limit_p90
             processed_data["messages_limit_p90"] = messages_limit_p90
 
+        # Calculate weekly totals from all blocks
+        weekly_tokens = _calculate_weekly_tokens(
+            data.get("blocks", []), current_time, args
+        )
+        processed_data["weekly_tokens"] = weekly_tokens
+
+        # Calculate per-agent token breakdown from all blocks
+        processed_data["agent_stats"] = _calculate_agent_stats(data.get("blocks", []))
+
         try:
-            screen_buffer = self.session_display.format_active_session_screen(
-                **processed_data
-            )
+            compact_mode = getattr(args, "compact", False) is True
+            if compact_mode:
+                from claude_monitor.ui.session_display import SessionDisplayData
+
+                session_data = SessionDisplayData(
+                    plan=processed_data["plan"],
+                    timezone=processed_data["timezone"],
+                    tokens_used=processed_data["tokens_used"],
+                    token_limit=processed_data["token_limit"],
+                    usage_percentage=processed_data["usage_percentage"],
+                    tokens_left=processed_data["tokens_left"],
+                    elapsed_session_minutes=processed_data["elapsed_session_minutes"],
+                    total_session_minutes=processed_data["total_session_minutes"],
+                    burn_rate=processed_data["burn_rate"],
+                    session_cost=processed_data["session_cost"],
+                    per_model_stats=processed_data["per_model_stats"],
+                    sent_messages=processed_data["sent_messages"],
+                    entries=processed_data["entries"],
+                    predicted_end_str=processed_data["predicted_end_str"],
+                    reset_time_str=processed_data["reset_time_str"],
+                    current_time_str=processed_data["current_time_str"],
+                )
+                compact_fields = getattr(args, "compact_fields", None)
+                if compact_fields:
+                    if self._enhanced_compact_formatter is None:
+                        field_list = compact_fields if isinstance(compact_fields, list) else [f.strip() for f in compact_fields.split(",")]
+                        self._compact_field_selector = CompactFieldSelector(field_list)
+                        self._compact_color_manager = CompactColorManager(CompactColorThresholds(), no_color=False)
+                        self._enhanced_compact_formatter = EnhancedCompactFormatter(self._compact_field_selector, self._compact_color_manager)
+                    compact_line = self._enhanced_compact_formatter.format_compact_line(session_data)
+                    screen_buffer = [compact_line]
+                else:
+                    screen_buffer = self.session_display.format_compact_session_screen(session_data)
+            else:
+                screen_buffer = self.session_display.format_active_session_screen(
+                    **processed_data
+                )
         except Exception as e:
             # Log the error with more details
             logger = logging.getLogger(__name__)
@@ -561,6 +622,106 @@ class ScreenBufferManager:
         return Group(*text_objects)
 
 
+def _calculate_weekly_tokens(
+    blocks: List[Dict[str, Any]], current_time: datetime, args: Any
+) -> Dict[str, Any]:
+    """Calculate total tokens since the weekly reset.
+
+    Args:
+        blocks: All session blocks
+        current_time: Current UTC time
+        args: CLI args (for reset_day and reset_time)
+
+    Returns:
+        Dict with weekly_total_tokens and weekly_reset_time
+    """
+    # Weekly reset: Monday 20:00 local time by default
+    # TODO: make configurable via --weekly-reset-day and --weekly-reset-time
+    reset_hour = 20
+    reset_weekday = 0  # Monday
+
+    tz_name = getattr(args, "timezone", "UTC")
+    try:
+        local_tz = pytz.timezone(tz_name)
+    except Exception:
+        local_tz = pytz.UTC
+
+    local_now = current_time.astimezone(local_tz)
+
+    # Find the most recent reset point (Monday 20:00 local)
+    # Use localize() for DST-safe wall-clock time construction
+    days_since_reset = (local_now.weekday() - reset_weekday) % 7
+    naive_reset = (local_now.replace(
+        hour=reset_hour, minute=0, second=0, microsecond=0
+    ) - timedelta(days=days_since_reset)).replace(tzinfo=None)
+    reset_candidate = local_tz.localize(naive_reset)
+
+    if reset_candidate > local_now:
+        reset_candidate -= timedelta(weeks=1)
+
+    weekly_start = reset_candidate.astimezone(pytz.UTC)
+
+    # Next reset
+    naive_next = (naive_reset + timedelta(weeks=1))
+    next_reset = local_tz.localize(naive_next)
+
+    # Sum tokens from individual entries since weekly_start
+    # (not blocks — a block straddling the reset boundary would be
+    # fully counted or fully missed otherwise)
+    weekly_total = 0
+    for block in blocks:
+        if block.get("isGap", False):
+            continue
+        for entry in block.get("entries", []):
+            ts_str = entry.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                entry_ts = datetime.fromisoformat(ts_str)
+                if entry_ts.tzinfo is None:
+                    entry_ts = entry_ts.replace(tzinfo=pytz.UTC)
+                if entry_ts >= weekly_start:
+                    weekly_total += (
+                        entry.get("inputTokens", 0)
+                        + entry.get("outputTokens", 0)
+                        + entry.get("cacheCreationTokens", 0)
+                        + entry.get("cacheReadInputTokens", 0)
+                    )
+            except (ValueError, TypeError):
+                continue
+
+    return {
+        "total_tokens": weekly_total,
+        "reset_time": next_reset,
+        "reset_time_str": next_reset.strftime("%a %H:%M"),
+    }
+
+
+def _calculate_agent_stats(blocks: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Calculate per-agent token totals from all blocks.
+
+    Args:
+        blocks: All session blocks with entries containing agentId
+
+    Returns:
+        Dict mapping agent_id to total tokens
+    """
+    agent_tokens: Dict[str, int] = {}
+    for block in blocks:
+        if block.get("isGap", False):
+            continue
+        for entry in block.get("entries", []):
+            agent = entry.get("agentId", "") or "unknown"
+            tokens = (
+                entry.get("inputTokens", 0)
+                + entry.get("outputTokens", 0)
+                + entry.get("cacheCreationTokens", 0)
+                + entry.get("cacheReadInputTokens", 0)
+            )
+            agent_tokens[agent] = agent_tokens.get(agent, 0) + tokens
+    return agent_tokens
+
+
 # Legacy functions for backward compatibility
 def create_screen_renderable(screen_buffer: List[str]) -> Group:
     """Legacy function - create screen renderable.
@@ -639,7 +800,7 @@ class SessionCalculator:
         Args:
             session_data: Dictionary containing session cost information
             time_data: Time data from calculate_time_data
-            cost_limit: Optional cost limit (defaults to 100.0)
+            cost_limit: Optional cost limit (defaults to DEFAULT_COST_LIMIT)
 
         Returns:
             Dictionary with cost predictions
@@ -653,9 +814,11 @@ class SessionCalculator:
             session_cost / max(1, elapsed_minutes) if elapsed_minutes > 0 else 0
         )
 
-        # Use provided cost limit or default
+        # Use provided cost limit or default from plan configuration
         if cost_limit is None:
-            cost_limit = 100.0
+            from claude_monitor.core.plans import DEFAULT_COST_LIMIT
+
+            cost_limit = DEFAULT_COST_LIMIT
 
         cost_remaining = max(0, cost_limit - session_cost)
 

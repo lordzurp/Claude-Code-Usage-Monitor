@@ -94,6 +94,37 @@ class SessionDisplayComponent:
 
         return f"{color} [{filled_bar}]"
 
+    def format_compact_session_screen(self, data: SessionDisplayData) -> list[str]:
+        """Format a single-line compact display for tmux/status bars.
+
+        Args:
+            data: SessionDisplayData object
+
+        Returns:
+            Screen buffer with one compact line
+        """
+        time_remaining = max(0, data.total_session_minutes - data.elapsed_session_minutes)
+        time_h = int(time_remaining // 60)
+        time_m = int(time_remaining % 60)
+
+        parts = [
+            f"📊 {data.tokens_used:,}/{data.token_limit:,} ({data.usage_percentage:.0f}%)",
+            f"🔥 {data.burn_rate:.0f}t/m",
+            f"⏱️ {time_h}h{time_m:02d}m",
+            f"📨 {data.sent_messages}msg",
+        ]
+        if data.predicted_end_str:
+            parts.append(f"→ {data.predicted_end_str}")
+
+        return [" | ".join(parts)]
+
+    def format_compact_no_active_session_screen(
+        self, plan: str, timezone: str, token_limit: int,
+        current_time, args
+    ) -> list[str]:
+        """Compact display when no active session."""
+        return [f"📊 0/{token_limit:,} (0%) | No active session | {plan}"]
+
     def format_active_session_screen_v2(self, data: SessionDisplayData) -> list[str]:
         """Format complete active session screen using data class.
 
@@ -185,11 +216,15 @@ class SessionDisplayComponent:
         header_manager = HeaderManager()
         screen_buffer.extend(header_manager.create_header(plan, timezone))
 
-        if plan in ["custom", "pro", "max5", "max20"]:
-            from claude_monitor.core.plans import DEFAULT_COST_LIMIT
+        if plan in ["custom", "pro", "team", "max5", "max20"]:
+            from claude_monitor.core.plans import Plans
 
-            cost_limit_p90 = kwargs.get("cost_limit_p90", DEFAULT_COST_LIMIT)
-            messages_limit_p90 = kwargs.get("messages_limit_p90", 1500)
+            cost_limit_p90 = kwargs.get(
+                "cost_limit_p90", Plans.get_cost_limit(plan)
+            )
+            messages_limit_p90 = kwargs.get(
+                "messages_limit_p90", Plans.get_message_limit(plan)
+            )
 
             screen_buffer.append("")
             if plan == "custom":
@@ -200,17 +235,6 @@ class SessionDisplayComponent:
                 screen_buffer.append(f"[separator]{'─' * 60}[/]")
             else:
                 screen_buffer.append("")
-
-            cost_percentage = (
-                min(100, percentage(session_cost, cost_limit_p90))
-                if cost_limit_p90 > 0
-                else 0
-            )
-            cost_bar = self._render_wide_progress_bar(cost_percentage)
-            screen_buffer.append(
-                f"💰 [value]Cost Usage:[/]           {cost_bar} {cost_percentage:4.1f}%    [value]${session_cost:.2f}[/] / [dim]${cost_limit_p90:.2f}[/]"
-            )
-            screen_buffer.append("")
 
             token_bar = self._render_wide_progress_bar(usage_percentage)
             screen_buffer.append(
@@ -243,6 +267,52 @@ class SessionDisplayComponent:
             )
             screen_buffer.append("")
 
+            # Weekly usage bar
+            weekly_data = kwargs.get("weekly_tokens", {})
+            if weekly_data:
+                weekly_total = weekly_data.get("total_tokens", 0)
+                weekly_reset_str = weekly_data.get("reset_time_str", "?")
+                # Display as token count with reset info (no % — we don't know the real limit)
+                screen_buffer.append(
+                    f"📅 [value]Weekly Usage:[/]          [warning]{weekly_total:,}[/] [dim]tokens since last reset[/] · [dim]resets {weekly_reset_str}[/]"
+                )
+                screen_buffer.append("")
+
+            # Per-agent breakdown with segmented bar
+            agent_stats = kwargs.get("agent_stats", {})
+            if agent_stats and len(agent_stats) > 0:
+                total_agent_tokens = sum(agent_stats.values())
+                if total_agent_tokens > 0:
+                    sorted_agents = sorted(agent_stats.items(), key=lambda x: x[1], reverse=True)
+                    bar_width = 50
+                    # Agent color palette
+                    agent_colors = ["warning", "info", "success", "error", "dim"]
+                    bar_segments = []
+                    label_parts = []
+                    remaining_width = bar_width
+
+                    for i, (agent, tokens) in enumerate(sorted_agents):
+                        pct = (tokens / total_agent_tokens) * 100
+                        if pct < 1.0:
+                            continue
+                        color = agent_colors[i % len(agent_colors)]
+                        seg_width = int(bar_width * tokens / total_agent_tokens)
+                        if i == 0:
+                            seg_width = remaining_width - sum(
+                                int(bar_width * t / total_agent_tokens)
+                                for _, t in sorted_agents[1:] if (t / total_agent_tokens) >= 0.01
+                            )
+                        remaining_width -= seg_width
+                        bar_segments.append(f"[{color}]{'█' * max(1, seg_width)}[/]")
+                        label_parts.append(f"{agent} {pct:.0f}%")
+
+                    bar_display = "".join(bar_segments)
+                    summary = " | ".join(label_parts)
+                    screen_buffer.append(
+                        f"👥 [value]Agent Distribution:[/]  👥 [{bar_display}] {summary}"
+                    )
+                    screen_buffer.append("")
+
             if per_model_stats:
                 model_bar = self.model_usage.render(per_model_stats)
                 screen_buffer.append(f"🤖 [value]Model Distribution:[/]   {model_bar}")
@@ -254,16 +324,6 @@ class SessionDisplayComponent:
             velocity_emoji = VelocityIndicator.get_velocity_emoji(burn_rate)
             screen_buffer.append(
                 f"🔥 [value]Burn Rate:[/]              [warning]{burn_rate:.1f}[/] [dim]tokens/min[/] {velocity_emoji}"
-            )
-
-            cost_per_min = (
-                session_cost / max(1, elapsed_session_minutes)
-                if elapsed_session_minutes > 0
-                else 0
-            )
-            cost_per_min_display = CostIndicator.render(cost_per_min)
-            screen_buffer.append(
-                f"💲 [value]Cost Rate:[/]              {cost_per_min_display} [dim]$/min[/]"
             )
         else:
             cost_display = CostIndicator.render(session_cost)
@@ -318,11 +378,13 @@ class SessionDisplayComponent:
         )
         screen_buffer.append("")
 
+        # Suppress cost-based notifications for subscription plans
+        is_subscription = plan in ["pro", "team", "max5", "max20"]
         self._add_notifications(
             screen_buffer,
             show_switch_notification,
-            show_exceed_notification,
-            show_tokens_will_run_out,
+            show_exceed_notification and not is_subscription,
+            show_tokens_will_run_out and not is_subscription,
             original_limit,
             token_limit,
         )

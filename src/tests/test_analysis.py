@@ -90,7 +90,7 @@ class TestAnalyzeUsage:
 
         result = analyze_usage(quick_start=True, hours_back=None)
         mock_load.assert_called_once_with(
-            data_path=None, hours_back=24, mode=CostMode.AUTO, include_raw=True
+            data_path=None, hours_back=24, mode=CostMode.AUTO, include_raw=True, data_paths=None
         )
 
         assert result["metadata"]["quick_start"] is True
@@ -112,7 +112,7 @@ class TestAnalyzeUsage:
 
         result = analyze_usage(quick_start=True, hours_back=48)
         mock_load.assert_called_once_with(
-            data_path=None, hours_back=48, mode=CostMode.AUTO, include_raw=True
+            data_path=None, hours_back=48, mode=CostMode.AUTO, include_raw=True, data_paths=None
         )
 
         assert result["metadata"]["quick_start"] is True
@@ -447,6 +447,7 @@ class TestBlockConversion:
             "model": "claude-3-haiku",
             "messageId": "msg_1",
             "requestId": "req_1",
+            "agentId": "",
         }
 
     def test_create_base_block_dict(self) -> None:
