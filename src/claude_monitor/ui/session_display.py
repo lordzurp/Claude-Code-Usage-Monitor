@@ -119,7 +119,7 @@ class SessionDisplayComponent:
         time_m = int(time_remaining % 60)
 
         parts = [
-            f"📊 {data.tokens_used:,}/{data.token_limit:,} ({data.usage_percentage:.0f}%)",
+            f"📊 {_humanize_tokens(data.tokens_used)}/{_humanize_tokens(data.token_limit)} ({data.usage_percentage:.0f}%)",
             f"🔥 {data.burn_rate:.0f}t/m",
             f"⏱️ {time_h}h{time_m:02d}m",
             f"📨 {data.sent_messages}msg",
@@ -134,7 +134,7 @@ class SessionDisplayComponent:
         current_time, args
     ) -> list[str]:
         """Compact display when no active session."""
-        return [f"📊 0/{token_limit:,} (0%) | No active session | {plan}"]
+        return [f"📊 0/{_humanize_tokens(token_limit)} (0%) | No active session | {plan}"]
 
     def format_active_session_screen_v2(self, data: SessionDisplayData) -> list[str]:
         """Format complete active session screen using data class.
