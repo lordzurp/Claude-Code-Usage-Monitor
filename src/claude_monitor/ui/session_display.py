@@ -90,7 +90,7 @@ class SessionDisplayComponent:
         else:
             color = "🔴"
 
-        progress_bar = TokenProgressBar(width=60)
+        progress_bar = TokenProgressBar(width=58)
         bar_style = get_cost_style(percentage)
 
         capped_percentage = min(percentage, 100.0)
@@ -294,7 +294,7 @@ class SessionDisplayComponent:
                 weekly_reset_str = weekly_data.get("reset_time_str", "?")
                 weekly_display = _humanize_tokens(weekly_total)
                 screen_buffer.append(
-                    f"📅 [value]Weekly Usage:[/]          [warning]{weekly_display}[/] [dim]since reset[/] · [dim]resets {weekly_reset_str}[/]"
+                    f"📅 [value]Weekly Usage:[/]     [warning]{weekly_display}[/] [dim]since reset[/] · [dim]resets {weekly_reset_str}[/]"
                 )
                 screen_buffer.append("")
 
@@ -304,7 +304,7 @@ class SessionDisplayComponent:
                 total_agent_tokens = sum(agent_stats.values())
                 if total_agent_tokens > 0:
                     sorted_agents = sorted(agent_stats.items(), key=lambda x: x[1], reverse=True)
-                    bar_width = 60
+                    bar_width = 58
                     # Agent color palette
                     agent_colors = ["warning", "info", "success", "error", "dim"]
                     bar_segments = []
