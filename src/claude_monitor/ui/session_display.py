@@ -90,7 +90,7 @@ class SessionDisplayComponent:
         else:
             color = "🔴"
 
-        progress_bar = TokenProgressBar(width=50)
+        progress_bar = TokenProgressBar(width=60)
         bar_style = get_cost_style(percentage)
 
         capped_percentage = min(percentage, 100.0)
@@ -304,7 +304,7 @@ class SessionDisplayComponent:
                 total_agent_tokens = sum(agent_stats.values())
                 if total_agent_tokens > 0:
                     sorted_agents = sorted(agent_stats.items(), key=lambda x: x[1], reverse=True)
-                    bar_width = 50
+                    bar_width = 60
                     # Agent color palette
                     agent_colors = ["warning", "info", "success", "error", "dim"]
                     bar_segments = []

@@ -58,7 +58,7 @@ class BaseProgressBar(ABC):
     DEFAULT_EMPTY_CHAR: Final[str] = "░"
     DEFAULT_MAX_PERCENTAGE: Final[float] = 100.0
 
-    def __init__(self, width: int = 50) -> None:
+    def __init__(self, width: int = 60) -> None:
         """Initialize base progress bar.
 
         Args:
