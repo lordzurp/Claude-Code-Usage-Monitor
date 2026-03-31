@@ -6,6 +6,8 @@ into a single cohesive module.
 
 import json
 import logging
+import os
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from datetime import timezone as tz
 from pathlib import Path
@@ -25,6 +27,92 @@ FIELD_COST_USD = "cost_usd"
 FIELD_MODEL = "model"
 TOKEN_INPUT = "input_tokens"
 TOKEN_OUTPUT = "output_tokens"
+
+
+@dataclass
+class FileState:
+    inode: int
+    mtime: float
+    size: int
+    last_offset: int
+
+
+class FileTracker:
+    """Tracks file byte offsets to enable incremental JSONL reading."""
+
+    _INDEX_PATH = Path("~/.claude-monitor/file_index.json")
+
+    def __init__(self) -> None:
+        self._states: Dict[str, FileState] = {}
+        self._load_index()
+
+    def _load_index(self) -> None:
+        index_path = self._INDEX_PATH.expanduser()
+        if not index_path.exists():
+            return
+        try:
+            with open(index_path) as f:
+                data = json.load(f)
+            self._states = {k: FileState(**v) for k, v in data.items()}
+        except Exception as e:
+            logging.getLogger(__name__).warning("Failed to load file index: %s", e)
+            self._states = {}
+
+    def save_index(self) -> None:
+        """Persist file states to disk. Call after each successful poll."""
+        index_path = self._INDEX_PATH.expanduser()
+        try:
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(index_path, "w") as f:
+                json.dump({k: asdict(v) for k, v in self._states.items()}, f)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Failed to save file index: %s", e)
+
+    def read_new_entries(
+        self,
+        file_path: Path,
+        mode: "CostMode",
+        timezone_handler: "TimezoneHandler",
+        pricing_calculator: "PricingCalculator",
+        processed_hashes: Set[str],
+    ) -> Tuple[List["UsageEntry"], List[Dict[str, Any]]]:
+        """Return only entries added since last read.
+
+        Logic:
+          - Unchanged (same inode/mtime/size) → skip
+          - Grown (same inode, size >) → seek(last_offset), read new lines only
+          - Replaced/truncated (inode changed or size <) → full reparse
+        """
+        key = str(file_path)
+        try:
+            st = os.stat(file_path)
+        except OSError:
+            return [], []
+
+        state = self._states.get(key)
+        if state is not None:
+            if state.mtime == st.st_mtime and state.size == st.st_size:
+                return [], []
+            if state.inode == st.st_ino and st.st_size > state.size:
+                offset = state.last_offset
+            else:
+                offset = 0
+        else:
+            offset = 0
+
+        entries, raw_data, new_offset = _read_file_from_offset(
+            file_path, offset, mode, timezone_handler, pricing_calculator,
+            processed_hashes,
+        )
+
+        self._states[key] = FileState(
+            inode=st.st_ino,
+            mtime=st.st_mtime,
+            size=st.st_size,
+            last_offset=new_offset,
+        )
+        return entries, raw_data
+
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +250,60 @@ def _find_jsonl_files(data_path: Path) -> List[Path]:
         logger.warning("Data path does not exist: %s", data_path)
         return []
     return list(data_path.rglob("*.jsonl"))
+
+
+def _read_file_from_offset(
+    file_path: Path,
+    offset: int,
+    mode: CostMode,
+    timezone_handler: TimezoneHandler,
+    pricing_calculator: PricingCalculator,
+    processed_hashes: Set[str],
+) -> Tuple[List[UsageEntry], List[Dict[str, Any]], int]:
+    """Read entries from file starting at byte offset.
+
+    Returns (entries, raw_limit_candidates, new_offset).
+    raw_limit_candidates: only entries of type 'system' or 'user'
+    (the only types consumed by detect_limits).
+    """
+    entries: List[UsageEntry] = []
+    raw_limit_candidates: List[Dict[str, Any]] = []
+    new_offset = offset
+    _logger = logging.getLogger(__name__)
+
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            f.seek(offset)
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                entry_type = data.get("type")
+                if entry_type in ("system", "user"):
+                    raw_limit_candidates.append(data)
+
+                unique_hash = _create_unique_hash(data)
+                if unique_hash and unique_hash in processed_hashes:
+                    continue
+
+                entry = _map_to_usage_entry(
+                    data, mode, timezone_handler, pricing_calculator
+                )
+                if entry:
+                    entries.append(entry)
+                    if unique_hash:
+                        processed_hashes.add(unique_hash)
+
+            new_offset = f.tell()
+    except Exception as e:
+        _logger.warning("Failed to read %s at offset %d: %s", file_path, offset, e)
+
+    return entries, raw_limit_candidates, new_offset
 
 
 def _process_single_file(

@@ -21,6 +21,8 @@ def analyze_usage(
     quick_start: bool = False,
     data_path: Optional[str] = None,
     data_paths: Optional[List[str]] = None,
+    preloaded_entries: Optional[List[UsageEntry]] = None,
+    preloaded_raw_entries: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Main entry point to generate response_final.json.
@@ -53,15 +55,21 @@ def analyze_usage(
         logger.info(f"Quick start mode: loading last {hours_back} hours")
 
     start_time = datetime.now()
-    entries, raw_entries = load_usage_entries(
-        data_path=data_path,
-        hours_back=hours_back,
-        mode=CostMode.AUTO,
-        include_raw=True,
-        data_paths=data_paths,
-    )
-    load_time = (datetime.now() - start_time).total_seconds()
-    logger.info(f"Data loaded in {load_time:.3f}s")
+    if preloaded_entries is not None:
+        entries = preloaded_entries
+        raw_entries = preloaded_raw_entries or []
+        load_time = 0.0
+        logger.debug("Using preloaded entries (%d)", len(entries))
+    else:
+        entries, raw_entries = load_usage_entries(
+            data_path=data_path,
+            hours_back=hours_back,
+            mode=CostMode.AUTO,
+            include_raw=True,
+            data_paths=data_paths,
+        )
+        load_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Data loaded in {load_time:.3f}s")
 
     start_time = datetime.now()
     analyzer = SessionAnalyzer(session_duration_hours=5)
