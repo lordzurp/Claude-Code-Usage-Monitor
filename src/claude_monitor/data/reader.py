@@ -269,7 +269,6 @@ def _read_file_from_offset(
     entries: List[UsageEntry] = []
     raw_limit_candidates: List[Dict[str, Any]] = []
     new_offset = offset
-    _logger = logging.getLogger(__name__)
 
     try:
         with open(file_path, encoding="utf-8") as f:
@@ -301,7 +300,7 @@ def _read_file_from_offset(
 
             new_offset = f.tell()
     except Exception as e:
-        _logger.warning("Failed to read %s at offset %d: %s", file_path, offset, e)
+        logger.warning("Failed to read %s at offset %d: %s", file_path, offset, e)
 
     return entries, raw_limit_candidates, new_offset
 

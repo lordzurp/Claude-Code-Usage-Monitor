@@ -4,31 +4,30 @@ import logging
 import time
 from datetime import datetime, timedelta
 from datetime import timezone as tz
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from claude_monitor.core.models import CostMode
+from claude_monitor.core.models import CostMode, UsageEntry
 from claude_monitor.core.pricing import PricingCalculator
 from claude_monitor.data.analysis import analyze_usage
-from claude_monitor.data.reader import FileTracker, _find_jsonl_files
+from claude_monitor.data.reader import FileTracker, _extract_agent_id, _find_jsonl_files
 from claude_monitor.error_handling import report_error
 from claude_monitor.utils.time_utils import TimezoneHandler
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_raw_timestamp(raw: Dict[str, Any]) -> "datetime":
+def _parse_raw_timestamp(raw: Dict[str, Any], tz_handler: TimezoneHandler) -> datetime:
     """Parse timestamp from raw dict for window filtering; returns epoch on failure."""
-    from datetime import timezone as _tz
-    from claude_monitor.utils.time_utils import TimezoneHandler
     ts = raw.get("timestamp")
     if ts:
         try:
-            result = TimezoneHandler().parse_timestamp(ts)
+            result = tz_handler.parse_timestamp(ts)
             if result:
                 return result
         except Exception:
             pass
-    return datetime.fromtimestamp(0, tz=_tz.utc)
+    return datetime.fromtimestamp(0, tz=tz.utc)
 
 
 class DataManager:
@@ -61,7 +60,7 @@ class DataManager:
 
         # Incremental parsing state
         self._file_tracker = FileTracker()
-        self._all_entries: List[Any] = []
+        self._all_entries: List[UsageEntry] = []
         self._all_raw_entries: List[Dict[str, Any]] = []
         self._processed_hashes: Set[str] = set()
         self._tz_handler = TimezoneHandler()
@@ -69,24 +68,21 @@ class DataManager:
 
     def _fetch_incremental(self) -> Optional[Dict[str, Any]]:
         """Fetch only new JSONL entries, merge with in-memory cache, run analysis."""
-        from pathlib import Path
-
         if self.data_paths:
             scan_dirs = [Path(p).expanduser() for p in self.data_paths]
         else:
             scan_dirs = [Path(self.data_path if self.data_path else "~/.claude/projects").expanduser()]
 
-        seen: set = set()
-        jsonl_files = []
+        file_to_agent: Dict[Path, str] = {}
         for scan_dir in scan_dirs:
+            agent_id = _extract_agent_id(scan_dir)
             for f in _find_jsonl_files(scan_dir):
                 resolved = f.resolve()
-                if resolved not in seen:
-                    seen.add(resolved)
-                    jsonl_files.append(resolved)
+                if resolved not in file_to_agent:
+                    file_to_agent[resolved] = agent_id
 
         added = 0
-        for file_path in jsonl_files:
+        for file_path, agent_id in file_to_agent.items():
             new_entries, new_raw = self._file_tracker.read_new_entries(
                 file_path,
                 CostMode.AUTO,
@@ -95,6 +91,8 @@ class DataManager:
                 self._processed_hashes,
             )
             if new_entries:
+                for entry in new_entries:
+                    entry.agent_id = agent_id
                 self._all_entries.extend(new_entries)
                 added += len(new_entries)
             if new_raw:
@@ -106,11 +104,12 @@ class DataManager:
 
         if self.hours_back and self._all_entries:
             cutoff = datetime.now(tz.utc) - timedelta(hours=self.hours_back)
-            entries_window = [e for e in self._all_entries if e.timestamp >= cutoff]
-            raw_window = [r for r in self._all_raw_entries if _parse_raw_timestamp(r) >= cutoff]
-        else:
-            entries_window = self._all_entries
-            raw_window = self._all_raw_entries
+            if self._all_entries[0].timestamp < cutoff:
+                self._all_entries = [e for e in self._all_entries if e.timestamp >= cutoff]
+                self._all_raw_entries = [
+                    r for r in self._all_raw_entries
+                    if _parse_raw_timestamp(r, self._tz_handler) >= cutoff
+                ]
 
         self._file_tracker.save_index()
 
@@ -120,8 +119,8 @@ class DataManager:
             use_cache=False,
             data_path=self.data_path,
             data_paths=self.data_paths,
-            preloaded_entries=entries_window,
-            preloaded_raw_entries=raw_window,
+            preloaded_entries=self._all_entries,
+            preloaded_raw_entries=self._all_raw_entries,
         )
 
     def get_data(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
